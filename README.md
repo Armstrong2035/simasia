@@ -1,11 +1,19 @@
 # Simasia Tone Guardrail
 
-Simasia scores how closely an LLM response matches a brand's tone of voice. It
-pairs a **frozen, pluggable embedding backend** with a small per-brand
-`LogisticRegression` head. The fitted head is stored in
-`simasia_<brand_id>_head.joblib`, **along with the training chunks and their
-embeddings** — these let `explain()` ground a verdict in the brand's own samples.
-(If your training text is sensitive, note that it is written into that artifact.)
+**Does an AI reply sound like your brand? Simasia gives it a score from 0 to 1.**
+
+What you can do:
+
+- **Train** it once on your brand's writing.
+- **Score** any AI response — how on-brand is it?
+- **Explain** the score — see the closest on-brand and off-brand samples.
+- **Refine** — keep regenerating a reply until it sounds right.
+
+How it works, in one line: a shared model turns text into numbers, and a tiny
+per-brand classifier learns your voice. Runs on CPU, no GPU needed.
+
+One heads-up: the trained model is saved to a file that includes your training
+text — keep it private if that text is sensitive.
 
 Version history is in [CHANGELOG.md](CHANGELOG.md).
 
