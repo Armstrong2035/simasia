@@ -33,6 +33,7 @@ simasia = "simasia.cli:main"
 [project.urls]
 Homepage = "https://github.com/Armstrong2035/simasia"
 Repository = "https://github.com/Armstrong2035/simasia"
+Changelog = "https://github.com/Armstrong2035/simasia/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 # Default embedding backend (OpenAI, text-embedding-3-small).

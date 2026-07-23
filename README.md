@@ -7,6 +7,8 @@ pairs a **frozen, pluggable embedding backend** with a small per-brand
 embeddings** — these let `explain()` ground a verdict in the brand's own samples.
 (If your training text is sensitive, note that it is written into that artifact.)
 
+Version history is in [CHANGELOG.md](CHANGELOG.md).
+
 ## Quick start
 
 Two methods: **`train`** once per brand, then **`refine`** in your response pipeline.
