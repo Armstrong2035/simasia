@@ -4,6 +4,13 @@ All notable changes to Simasia are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-07-23
+
+### Changed
+- Rewrote the project description / README intro to be shorter and more scannable
+  (no functional changes). A published version's description is immutable, so this
+  ships as a new release.
+
 ## [0.2.0] - 2026-07-23
 
 First public release.
@@ -45,4 +52,5 @@ First public release.
   per-brand `LogisticRegression` head, with paired on/off-brand chunk training.
   Never published to PyPI (used for TestPyPI only).
 
+[0.2.1]: https://github.com/Armstrong2035/simasia/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Armstrong2035/simasia/releases/tag/v0.2.0

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simasia"
-version = "0.2.0"
+version = "0.2.1"
 description = "Per-brand tone guardrail for LLM responses via pluggable embeddings and a small logistic-regression head."
 readme = "README.md"
 requires-python = ">=3.10"
