@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simasia"
+version = "0.2.0"
+description = "Per-brand tone guardrail for LLM responses via pluggable embeddings and a small logistic-regression head."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Armstrong Olusoji", email = "armstrongolusoji9@gmail.com" }]
+keywords = ["llm", "brand-voice", "tone", "guardrail", "embeddings", "classification"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+]
+dependencies = [
+    "scikit-learn>=1.3.0",
+    "joblib>=1.3.0",
+    "numpy>=1.24.0",
+    "tomli>=2.0.0; python_version < '3.11'",
+]
+
+[project.scripts]
+simasia = "simasia.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Armstrong2035/simasia"
+Repository = "https://github.com/Armstrong2035/simasia"
+
+[project.optional-dependencies]
+# Default embedding backend (OpenAI, text-embedding-3-small).
+openai = ["openai>=1.0.0"]
+# Offline embedding backend (frozen sentence-transformer, CPU).
+local = ["sentence-transformers>=3.0.0"]
+# URL-based training data (fetch + clean-text extraction).
+urls = ["trafilatura>=1.6.0"]
+# Everything needed to run the tests.
+test = ["pytest>=7.0.0"]
+
+[tool.setuptools.packages.find]
+include = ["simasia*"]

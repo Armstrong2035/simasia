@@ -1,0 +1,26 @@
+# Copy to simasia.toml and edit. Keys do NOT go here — put them in .env.local.
+
+[brand]
+id = "fintech_core"
+
+[embedding]
+provider = "openai"                 # "openai" or "local"
+model = "text-embedding-3-small"
+# dimensions = 512                  # optional: shorten the vector
+
+[generation]
+model = "gpt-4o-mini"               # used only when off_brand is not provided
+
+[storage]
+dir = "."                           # where the trained artifact is written
+
+[training]
+# On-brand source — pick ONE style:
+on_brand_text = "We build automated investment tools. They work fast."
+# on_brand_file = "brand_voice.txt"
+# on_brand_urls = ["https://brand.example/voice", "https://brand.example/blog"]
+
+# Off-brand is OPTIONAL. Omit it and Simasia generates an opposite per chunk.
+# off_brand_text = "..."
+# off_brand_file = "off_brand.txt"
+# off_brand_urls = ["https://competitor.example/legal"]

@@ -1,0 +1,8 @@
+# Quick-start install for the default (OpenAI) backend with URL training.
+# For a fully offline setup instead, install: pip install .[local,urls]
+# Packaging metadata and the full extras list live in pyproject.toml.
+scikit-learn>=1.3.0
+joblib>=1.3.0
+numpy>=1.24.0
+openai>=1.0.0
+trafilatura>=1.6.0
