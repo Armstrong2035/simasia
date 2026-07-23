@@ -89,31 +89,39 @@ guard = SimasiaGuard(brand_id="fintech_core", embedding_model=LocalEmbedder())
 
 ## Training
 
-### From URLs
-
-Each URL is fetched and reduced to its main article text; all on-brand pages are
-concatenated into one corpus, all off-brand pages into another, and both are then
-chunked and fitted. Counts need not match.
+`train(on_brand, off_brand=None)` is the one entry point. Each side accepts three
+source types, and you can mix them:
 
 ```python
-guard = SimasiaGuard(brand_id="fintech_core")
-accuracy = guard.calibrate_from_urls(
-    on_brand_urls=["https://brand.example/voice", "https://brand.example/blog/1"],
-    off_brand_urls=["https://competitor.example/legal", "https://gov.example/notice"],
+guard.train("We build automated investment tools. They work fast.")  # str  -> raw text
+guard.train(Path("brand_voice.txt"))                                 # Path -> read file
+guard.train(["https://brand.example/voice", "https://brand.example/blog"])  # list -> URLs
+```
+
+A `str` is always raw text (never guessed as a path); use `Path` for a file. URLs
+are fetched and reduced to clean article text, then all on-brand pages are
+concatenated into one corpus (same for off-brand) before chunking.
+
+**On-brand only (opposites generated).** Omit `off_brand` and a lightweight LLM
+writes an off-brand opposite for each on-brand chunk (key: `GENERATION_KEY`, or it
+falls back to `EMBEDDING_KEY`):
+
+```python
+guard.train(on_brand="We build automated investment tools. They work fast.")
+```
+
+**Both sides supplied (no LLM).** Pass both to skip generation entirely:
+
+```python
+guard.train(
+    on_brand="We build automated investment tools. They work fast.",
+    off_brand="Our enterprise architecture processes asset allocations. "
+              "Systems experience transactional delay cycles.",
 )
 ```
 
-### From raw text
-
-```python
-accuracy = guard.calibrate_weights(
-    on_brand_raw="We build automated investment tools. They work fast.",
-    off_brand_raw=(
-        "Our corporate enterprise architecture processes asset allocations. "
-        "Systems experience transactional delay cycles."
-    ),
-)
-```
+The lower-level `calibrate_weights` (raw text) and `calibrate_from_urls` (URLs)
+methods remain available if you want to call them directly.
 
 ## Scoring live responses
 
