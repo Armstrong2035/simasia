@@ -75,6 +75,80 @@ def test_empty_url_list_is_rejected(tmp_path):
         guard.calibrate_from_urls([], ["https://brand.example/off"], fetcher=lambda url: "x")
 
 
+def test_train_from_labeled_fits_discrete_examples(tmp_path):
+    guard = SimasiaGuard("demo", tmp_path, embedding_model=FakeEmbedder())
+    accuracy = guard.train_from_labeled(
+        [
+            ("A friendly warm reply for you.", 1),
+            ("Another friendly note here.", 1),
+            ("Rigid formal corporate notice.", 0),
+            ("Cold impersonal statement follows.", 0),
+        ]
+    )
+
+    assert 0.0 <= accuracy <= 1.0
+    assert len(guard.on_chunks) == 2 and len(guard.off_chunks) == 2  # no chunking
+    assert (tmp_path / "simasia_demo_head.joblib").exists()
+    assert 0.0 <= guard.evaluate_response("A friendly hello.") <= 1.0
+
+
+def test_train_from_labeled_requires_both_classes(tmp_path):
+    guard = SimasiaGuard("demo", tmp_path, embedding_model=FakeEmbedder())
+    with pytest.raises(ValueError, match="at least one on-brand"):
+        guard.train_from_labeled([("friendly one", 1), ("friendly two", 1)])
+
+
+def test_train_from_labeled_rejects_bad_label(tmp_path):
+    guard = SimasiaGuard("demo", tmp_path, embedding_model=FakeEmbedder())
+    with pytest.raises(ValueError, match="Each label must be"):
+        guard.train_from_labeled([("text a", 2), ("text b", 0)])
+
+
+def test_train_from_labeled_can_extend_existing(tmp_path):
+    guard = SimasiaGuard("demo", tmp_path, embedding_model=FakeEmbedder())
+    guard.calibrate_weights(
+        "Friendly warm reply here. Friendly humans help now.",
+        "Rigid formal reply here. Formal systems delay now.",
+    )
+    before_on = len(guard.on_chunks)
+
+    reloaded = SimasiaGuard("demo", tmp_path, embedding_model=FakeEmbedder())
+    reloaded.train_from_labeled([("A new friendly thumbs up.", 1)], include_existing=True)
+
+    assert len(reloaded.on_chunks) == before_on + 1  # existing + new, no re-chunk
+
+
+def test_pick_best_ranks_and_returns_top_candidate(tmp_path):
+    on_brand = "Friendly service solves your problem. Friendly humans reply promptly."
+    off_brand = "Rigid processes delay your problem. Formal systems reply eventually."
+    guard = SimasiaGuard("demo", tmp_path, embedding_model=FakeEmbedder())
+    guard.calibrate_weights(on_brand, off_brand)
+
+    result = guard.pick_best(
+        [
+            "Rigid formal notice of delay.",
+            "A friendly warm friendly reply is ready for you.",
+            "Formal systems process the request.",
+        ]
+    )
+
+    assert "friendly" in result["text"].lower()  # most on-brand candidate wins
+    assert len(result["ranked"]) == 3
+    scores = [item["score"] for item in result["ranked"]]
+    assert scores == sorted(scores, reverse=True)  # ranked best-first
+    assert result["score"] == scores[0]
+
+
+def test_pick_best_rejects_empty_list(tmp_path):
+    guard = SimasiaGuard("demo", tmp_path, embedding_model=FakeEmbedder())
+    guard.calibrate_weights(
+        "Friendly warm reply is here. Friendly humans help now.",
+        "Rigid formal reply is here. Formal systems delay now.",
+    )
+    with pytest.raises(ValueError, match="non-empty list"):
+        guard.pick_best([])
+
+
 def test_explain_returns_score_and_nearest_exemplars(tmp_path):
     on_brand = "Friendly service solves your problem. Friendly humans reply promptly."
     off_brand = "Rigid processes delay your problem. Formal systems reply eventually."
@@ -253,6 +327,112 @@ def test_train_from_on_brand_only_generates_opposites(tmp_path):
 
     result = guard.explain("A friendly response is ready.")
     assert result["closest_off_brand"]["text"].startswith("Rigid formal notice")
+
+
+def test_clean_corpus_strips_boilerplate():
+    from simasia.sources import clean_corpus
+
+    raw = (
+        "Source: https://emerson.example/blog/curls\n"
+        "August 12, 2025•10 min read ★\n"
+        "We love your curls and want them to thrive. Email: info@emerson.example "
+        "Instagram: @emerson.beauty Choosing a selection results in a full page refresh."
+    )
+    out = clean_corpus(raw)
+
+    assert "http" not in out
+    assert "min read" not in out
+    assert "★" not in out
+    assert "info@emerson.example" not in out
+    assert "page refresh" not in out
+    assert "We love your curls and want them to thrive." in out
+
+
+def test_max_chunks_caps_generation(tmp_path):
+    from simasia.guard import TONE_DIMENSIONS
+
+    # Build a corpus with many chunks, then cap it.
+    sentences = " ".join(f"Friendly sentence number {i} is warm here." for i in range(40))
+    generator = FakeGenerator()
+    guard = SimasiaGuard(
+        "demo", tmp_path, embedding_model=FakeEmbedder(), generator=generator
+    )
+
+    guard.train(sentences, max_chunks=10)
+
+    # 10 on-brand chunks, one opposite per dimension each.
+    assert len(guard.on_chunks) == 10
+    assert generator.calls == 10 * len(TONE_DIMENSIONS)
+    assert len(guard.off_chunks) == 10 * len(TONE_DIMENSIONS)
+
+
+def test_dimensions_subset_limits_opposites(tmp_path):
+    sentences = " ".join(f"Friendly sentence number {i} is warm here." for i in range(6))
+    generator = FakeGenerator()
+    guard = SimasiaGuard(
+        "demo", tmp_path, embedding_model=FakeEmbedder(), generator=generator
+    )
+
+    guard.train(sentences, max_chunks=3, dimensions=["empathy", "hedging"])
+
+    assert generator.calls == 3 * 2  # 3 chunks x 2 chosen dimensions
+
+
+def test_unknown_dimension_is_rejected(tmp_path):
+    guard = SimasiaGuard(
+        "demo", tmp_path, embedding_model=FakeEmbedder(), generator=FakeGenerator()
+    )
+    text = "Friendly warm sentence is here now. Another warm sentence follows here too."
+    with pytest.raises(ValueError, match="Unknown tone dimension"):
+        guard.train(text, dimensions=["nonsense"])
+
+
+def test_openai_embedder_batches_requests():
+    from simasia import OpenAIEmbedder
+
+    class FakeItem:
+        def __init__(self, vec):
+            self.embedding = vec
+
+    class FakeResp:
+        def __init__(self, items):
+            self.data = items
+
+    class FakeEmbeddings:
+        def __init__(self):
+            self.batch_sizes = []
+
+        def create(self, model, input, **_kw):
+            self.batch_sizes.append(len(input))
+            return FakeResp([FakeItem([0.0, 1.0]) for _ in input])
+
+    class FakeClient:
+        def __init__(self):
+            self.embeddings = FakeEmbeddings()
+
+    client = FakeClient()
+    embedder = OpenAIEmbedder(client=client, batch_size=3)
+    out = embedder.encode([f"s{i}" for i in range(7)])
+
+    assert out.shape == (7, 2)
+    assert client.embeddings.batch_sizes == [3, 3, 1]  # 7 split into batches of 3
+
+
+def test_train_reports_progress_per_opposite(tmp_path):
+    on_brand = (
+        "Friendly service solves your problem. Friendly humans reply promptly. "
+        "Friendly agents follow up warmly."
+    )
+    guard = SimasiaGuard(
+        "demo", tmp_path, embedding_model=FakeEmbedder(), generator=FakeGenerator()
+    )
+    seen = []
+    guard.train(on_brand, progress=lambda done, total: seen.append((done, total)))
+
+    assert seen  # progress was reported
+    total = seen[-1][1]
+    assert [d for d, _ in seen] == list(range(1, total + 1))  # 1..total, in order
+    assert all(t == total for _, t in seen)
 
 
 def test_train_accepts_text_files_and_rejects_bad_types(tmp_path):

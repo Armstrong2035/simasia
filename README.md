@@ -113,12 +113,24 @@ are fetched and reduced to clean article text, then all on-brand pages are
 concatenated into one corpus (same for off-brand) before chunking.
 
 **On-brand only (opposites generated).** Omit `off_brand` and a lightweight LLM
-writes an off-brand opposite for each on-brand chunk (key: `GENERATION_KEY`, or it
-falls back to `EMBEDDING_KEY`):
+writes off-brand opposites for each on-brand chunk — one per **tone dimension**
+(directness, empathy, hedging, formality, enthusiasm, technicality), each flipping
+a single axis (key: `GENERATION_KEY`, or it falls back to `EMBEDDING_KEY`):
 
 ```python
 guard.train(on_brand="We build automated investment tools. They work fast.")
+
+# Cap cost / pick axes (also settable in simasia.toml):
+guard.train(on_brand="...", max_chunks=100, dimensions=["empathy", "hedging"])
 ```
+
+`max_chunks` randomly samples the corpus (each chunk yields one opposite per
+dimension, so cost = chunks x dimensions). Web boilerplate (URLs, dates, contact
+lines, "min read") is stripped before chunking.
+
+> Note: generated opposites are a *bootstrap*. Real user feedback (see
+> [Learning from production](#learning-from-production-thumbs-updown)) makes the
+> model far sharper.
 
 **Both sides supplied (no LLM).** Pass both to skip generation entirely:
 
@@ -172,6 +184,43 @@ def generate(feedback):
 result = guard.refine(generate, threshold=0.7, max_attempts=4)
 # {"text": "...", "score": 0.82, "passed": True, "attempts": 2}
 ```
+
+## Picking the best of N (recommended for production)
+
+`pick_best()` scores several candidate responses and returns the most on-brand
+one. **You generate the candidates; Simasia only ranks them.** Because it ranks
+candidates against each other, it is robust even when the model's absolute scores
+are not well-calibrated.
+
+```python
+candidates = [my_llm(prompt) for _ in range(5)]   # you generate N
+best = guard.pick_best(candidates)                 # Simasia ranks
+send(best["text"])
+# best = {"text": "...", "score": 0.83, "ranked": [{"text": ..., "score": ...}, ...]}
+```
+
+## Learning from production (thumbs up/down)
+
+Generated opposites only bootstrap the model. The real gain comes from **user
+feedback**: log thumbs up (on-brand, `1`) and thumbs down (off-brand, `0`) in your
+app, then feed them back. Each response is one example — embedded as-is, no
+chunking, no generation.
+
+```python
+guard.train_from_labeled([
+    ("Hey lovely, here's how to refresh day-2 curls...", 1),   # 👍
+    ("Per our records, your inquiry is being processed.", 0),  # 👎
+])
+
+# Grow an existing model with the day's feedback (reuses stored embeddings):
+guard.train_from_labeled(todays_thumbs, include_existing=True)
+```
+
+Once enough real feedback accumulates, retrain **without** `include_existing` on
+the pure feedback set to drop the synthetic bootstrap entirely.
+
+**The full production loop:** generate N → `pick_best` → ship the winner → collect
+👍/👎 → `train_from_labeled` on a schedule → the ranking sharpens over time.
 
 ## Where the artifact is stored
 

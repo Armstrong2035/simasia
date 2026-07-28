@@ -4,6 +4,30 @@ All notable changes to Simasia are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-07-24
+
+### Added
+- `pick_best(candidates)` — best-of-N reranking: score several candidate responses
+  and return the most on-brand one (with the full ranking). Robust to a
+  poorly-calibrated absolute threshold, since it only ranks.
+- `train_from_labeled(examples, include_existing=False)` — train directly from
+  labelled responses (production thumbs up/down). Each response is one example, no
+  chunking or generation. `include_existing` grows the current model with new
+  feedback, reusing stored embeddings.
+- Per-dimension off-brand generation: on-brand-only training now creates one
+  opposite per tone axis (`TONE_DIMENSIONS`: directness, empathy, hedging,
+  formality, enthusiasm, technicality), each flipping a single axis. Selectable via
+  the `dimensions` argument / config key.
+- `max_chunks` — randomly sample a large corpus to cap generation cost.
+- Corpus cleaning (`clean_corpus`): strips URLs, emails, dates, "min read",
+  contact/handles, and e-commerce boilerplate before chunking.
+- Training progress callback `progress(done, total)`, shown live by `simasia train`.
+- `simasia explain` CLI command; the output now echoes the input.
+
+### Changed
+- `OpenAIEmbedder` batches requests (default 1000/request), so large corpora no
+  longer exceed the API's per-request input cap.
+
 ## [0.2.1] - 2026-07-23
 
 ### Changed
@@ -52,5 +76,6 @@ First public release.
   per-brand `LogisticRegression` head, with paired on/off-brand chunk training.
   Never published to PyPI (used for TestPyPI only).
 
+[0.3.0]: https://github.com/Armstrong2035/simasia/releases/tag/v0.3.0
 [0.2.1]: https://github.com/Armstrong2035/simasia/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Armstrong2035/simasia/releases/tag/v0.2.0

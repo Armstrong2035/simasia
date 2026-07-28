@@ -38,9 +38,11 @@ class OpenAIEmbedder:
         api_key: str | None = None,
         dimensions: int | None = None,
         client: object | None = None,
+        batch_size: int = 1000,
     ) -> None:
         self.model = model
         self.dimensions = dimensions
+        self.batch_size = batch_size
         if client is None:
             api_key = api_key or os.environ.get("EMBEDDING_KEY")
             if not api_key:
@@ -59,11 +61,17 @@ class OpenAIEmbedder:
         self._client = client
 
     def encode(self, sentences: list[str], **_kwargs: object) -> np.ndarray:
-        request: dict[str, object] = {"model": self.model, "input": list(sentences)}
-        if self.dimensions is not None:
-            request["dimensions"] = self.dimensions
-        response = self._client.embeddings.create(**request)
-        return np.asarray([item.embedding for item in response.data], dtype=np.float32)
+        sentences = list(sentences)
+        vectors: list[list[float]] = []
+        # OpenAI caps inputs per request (2048), so send in batches.
+        for start in range(0, len(sentences), self.batch_size):
+            batch = sentences[start : start + self.batch_size]
+            request: dict[str, object] = {"model": self.model, "input": batch}
+            if self.dimensions is not None:
+                request["dimensions"] = self.dimensions
+            response = self._client.embeddings.create(**request)
+            vectors.extend(item.embedding for item in response.data)
+        return np.asarray(vectors, dtype=np.float32)
 
 
 class LocalEmbedder:

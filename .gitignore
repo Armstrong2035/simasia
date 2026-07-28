@@ -18,3 +18,7 @@ dist/
 
 # Trained model artifacts
 simasia_*_head.joblib
+
+# Local working config + training corpora (keep simasia.example.toml)
+simasia.toml
+*_corpus.txt

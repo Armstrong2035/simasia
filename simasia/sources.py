@@ -9,9 +9,36 @@ normally — a page's content is raw material, never a single chunk.
 
 from __future__ import annotations
 
+import re
 from typing import Callable
 
 CORPUS_SEPARATOR = "\n\n"
+
+# Patterns for boilerplate that pollutes brand voice: URLs, emails, star glyphs,
+# "Source:" lines, "N min read", dates, e-commerce page-reload notices, and
+# social/contact handles. Each is replaced with a space.
+_MONTHS = (
+    "january|february|march|april|may|june|july|august|september|october|november|december"
+)
+_CLEANERS = [
+    re.compile(r"https?://\S+"),
+    re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"),
+    re.compile(r"[★☆⭐]"),
+    re.compile(r"(?im)^\s*source:.*$"),
+    re.compile(r"(?i)\b\d+\s*min read\b"),
+    re.compile(rf"(?i)\b(?:{_MONTHS})\s+\d{{1,2}},\s*\d{{4}}\b"),
+    re.compile(r"(?i)[^.!?]*\bpage (?:refresh|reload)[^.!?]*[.!?]"),
+    re.compile(r"(?i)\b(?:instagram|whatsapp|email)\s*:\s*\S*"),
+    re.compile(r"[•·▪]"),
+]
+
+
+def clean_corpus(text: str) -> str:
+    """Strip common web boilerplate so only brand voice remains, then normalise
+    whitespace. Applied to training corpora before chunking."""
+    for pattern in _CLEANERS:
+        text = pattern.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def fetch_url_text(url: str) -> str:

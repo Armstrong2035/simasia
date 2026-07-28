@@ -7,8 +7,15 @@ and runs the requested command.
 from __future__ import annotations
 
 import argparse
+import sys
 
 from .config import build_guard, load_config, load_dotenv, run_training
+
+
+def _print_progress(done: int, total: int) -> None:
+    """Show opposite-generation progress on one updating line."""
+    end = "\n" if done == total else ""
+    print(f"\r  generating opposites: {done}/{total}", end=end, file=sys.stderr, flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
 
     if args.command == "train":
-        accuracy = run_training(config)
+        accuracy = run_training(config, progress=_print_progress)
         print(f"Trained brand '{config['brand']['id']}'. Training accuracy: {accuracy:.3f}")
     elif args.command == "score":
         guard = build_guard(config)
@@ -47,9 +54,11 @@ def main(argv: list[str] | None = None) -> int:
         result = guard.explain(args.text)
         on = result["closest_on_brand"]
         off = result["closest_off_brand"]
-        print(f"score:   {result['score']:.3f} ({result['verdict']})")
-        print(f"on-brand  (sim {on['similarity']:.2f}): {on['text']}")
-        print(f"off-brand (sim {off['similarity']:.2f}): {off['text']}")
+        print(f'input:  "{args.text}"')
+        print(f"score:  {result['score']:.3f} ({result['verdict']})")
+        print("--- closest training examples (why) ---")
+        print(f"nearest on-brand  (sim {on['similarity']:.2f}): {on['text']}")
+        print(f"nearest off-brand (sim {off['similarity']:.2f}): {off['text']}")
     return 0
 
 

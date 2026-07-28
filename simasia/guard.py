@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import random
 import re
 from pathlib import Path
 from typing import Callable
@@ -12,15 +13,26 @@ from sklearn.linear_model import LogisticRegression
 
 from .embeddings import EmbeddingModel, OpenAIEmbedder
 from .generation import GenerationModel, OpenAIGenerator
-from .sources import build_corpus, fetch_url_text
+from .sources import build_corpus, clean_corpus, fetch_url_text
 from .storage import ArtifactStore, FileArtifactStore
 
 ARTIFACT_FORMAT = "simasia-head/2"
 
-OPPOSITE_PROMPT = (
-    "Rewrite the text below so it has the OPPOSITE tone and voice, while keeping a "
-    "similar topic and length. Return only the rewritten text, with no preamble.\n\n"
-    "Text: {chunk}"
+# Tone-of-voice axes. Off-brand text is the on-brand text flipped on one axis, so
+# the classifier learns a tight on-brand region hemmed in from every direction.
+TONE_DIMENSIONS = {
+    "directness": "direct and blunt vs. indirect and roundabout",
+    "empathy": "warm and empathetic vs. cold and detached",
+    "hedging": "confident and certain vs. hedged and tentative",
+    "formality": "casual and approachable vs. stiff and corporate",
+    "enthusiasm": "matter-of-fact vs. exaggerated and hyped",
+    "technicality": "informative and specific vs. vague and empty",
+}
+
+DIMENSION_PROMPT = (
+    "Rewrite the text below. Change ONLY its {dimension}: flip it to the opposite end "
+    "of this axis ({axis}). Keep the topic, the length, and every other aspect of the "
+    "tone unchanged. Return only the rewritten text, with no preamble.\n\nText: {chunk}"
 )
 
 
@@ -101,59 +113,103 @@ class SimasiaGuard:
         self,
         on_brand: str | Path | list[str],
         off_brand: str | Path | list[str] | None = None,
+        progress: Callable[[int, int], None] | None = None,
+        max_chunks: int | None = None,
+        dimensions: list[str] | None = None,
     ) -> float:
         """Train the brand model (the main training entry point).
 
         Each side accepts raw text (``str``), a file path (``pathlib.Path``, read
         as text), or a list of URLs (``list[str]``). If ``off_brand`` is omitted, an
-        off-brand opposite is generated for each on-brand chunk with the generation
-        backend (see :meth:`calibrate_from_on_brand`). Returns training accuracy.
+        off-brand opposite is generated for each on-brand chunk on each tone
+        dimension (see :meth:`calibrate_from_on_brand`). Returns training accuracy.
+
+        ``progress`` is an optional callback ``progress(done, total)`` reporting how
+        many opposite examples are generated so far (on-brand-only mode).
+        ``max_chunks`` randomly samples that many on-brand chunks before generating
+        opposites. ``dimensions`` selects which tone axes to flip (default: all of
+        :data:`TONE_DIMENSIONS`).
         """
         if off_brand is None:
-            return self.calibrate_from_on_brand(on_brand)
+            return self.calibrate_from_on_brand(
+                on_brand, progress=progress, max_chunks=max_chunks, dimensions=dimensions
+            )
         return self.calibrate_weights(self._to_corpus(on_brand), self._to_corpus(off_brand))
 
-    def calibrate_from_on_brand(self, on_brand: str | Path | list[str]) -> float:
-        """Train from on-brand text alone, generating each off-brand opposite.
+    def calibrate_from_on_brand(
+        self,
+        on_brand: str | Path | list[str],
+        progress: Callable[[int, int], None] | None = None,
+        max_chunks: int | None = None,
+        dimensions: list[str] | None = None,
+    ) -> float:
+        """Train from on-brand text alone, generating off-brand opposites.
 
-        The on-brand corpus (raw text, a file path, or a list of URLs) is chunked,
-        and the generation backend rewrites each chunk into an off-brand opposite.
-        Both sets are then embedded, labelled, and fitted like any other run.
+        The on-brand corpus (raw text, a file path, or a list of URLs) is chunked.
+        For each chunk, the generation backend produces one off-brand opposite per
+        tone dimension (each flips a single axis). All chunks and opposites are then
+        embedded, labelled, and fitted. ``progress(done, total)`` is called after
+        each opposite. ``max_chunks`` caps how many on-brand chunks are used (random
+        sample). ``dimensions`` selects which axes to flip.
         """
         on_chunks = self._chunk_text(self._to_corpus(on_brand))
         if not on_chunks:
             raise ValueError("Training input contains insufficient sentences to extract tone.")
-        off_chunks = self._generate_opposites(on_chunks)
+        if max_chunks is not None and 0 < max_chunks < len(on_chunks):
+            on_chunks = random.sample(on_chunks, max_chunks)
+        off_chunks = self._generate_opposites(on_chunks, progress=progress, dimensions=dimensions)
         return self._fit(on_chunks, off_chunks)
 
     @staticmethod
     def _to_corpus(source: str | Path | list[str]) -> str:
-        """Resolve a training source to raw text.
+        """Resolve a training source to clean raw text.
 
         ``Path`` is read as a text file, ``list``/``tuple`` is fetched as URLs, and
         ``str`` is used as-is (raw text — never treated as a path, to avoid guessing).
+        Web boilerplate is stripped via :func:`clean_corpus` before training.
         """
         if isinstance(source, Path):
-            return source.read_text(encoding="utf-8")
-        if isinstance(source, (list, tuple)):
-            return build_corpus(list(source))
-        if isinstance(source, str):
-            return source
-        raise TypeError(
-            "Training source must be str (raw text), pathlib.Path (a file), or "
-            "list[str] (URLs)."
-        )
+            text = source.read_text(encoding="utf-8")
+        elif isinstance(source, (list, tuple)):
+            text = build_corpus(list(source))
+        elif isinstance(source, str):
+            text = source
+        else:
+            raise TypeError(
+                "Training source must be str (raw text), pathlib.Path (a file), or "
+                "list[str] (URLs)."
+            )
+        return clean_corpus(text)
 
-    def _generate_opposites(self, on_chunks: list[str]) -> list[str]:
-        """Rewrite each on-brand chunk into an off-brand opposite via the LLM."""
+    def _generate_opposites(
+        self,
+        on_chunks: list[str],
+        progress: Callable[[int, int], None] | None = None,
+        dimensions: list[str] | None = None,
+    ) -> list[str]:
+        """Rewrite each on-brand chunk into one off-brand opposite per tone axis."""
         if self.generator is None:
             self.generator = OpenAIGenerator()
+        dims = dimensions if dimensions is not None else list(TONE_DIMENSIONS)
+        unknown = [name for name in dims if name not in TONE_DIMENSIONS]
+        if unknown:
+            raise ValueError(f"Unknown tone dimension(s): {unknown}. Choose from {list(TONE_DIMENSIONS)}.")
+
+        total = len(on_chunks) * len(dims)
         opposites: list[str] = []
+        done = 0
         for chunk in on_chunks:
-            opposite = self.generator.generate(OPPOSITE_PROMPT.format(chunk=chunk)).strip()
-            if not opposite:
-                raise ValueError("Generation backend returned an empty opposite example.")
-            opposites.append(opposite)
+            for name in dims:
+                prompt = DIMENSION_PROMPT.format(
+                    dimension=name, axis=TONE_DIMENSIONS[name], chunk=chunk
+                )
+                opposite = self.generator.generate(prompt).strip()
+                if not opposite:
+                    raise ValueError("Generation backend returned an empty opposite example.")
+                opposites.append(opposite)
+                done += 1
+                if progress is not None:
+                    progress(done, total)
         return opposites
 
     def calibrate_from_urls(
@@ -186,21 +242,86 @@ class SimasiaGuard:
             raise ValueError("Training inputs contain insufficient sentences to extract tone.")
         return self._fit(on_chunks, off_chunks)
 
+    def train_from_labeled(
+        self,
+        examples: list[tuple[str, int]],
+        include_existing: bool = False,
+    ) -> float:
+        """Train directly from labelled responses (e.g. production thumbs up/down).
+
+        ``examples`` is a list of ``(text, label)`` pairs where label ``1`` is
+        on-brand (thumbs up) and ``0`` is off-brand (thumbs down). Each response is
+        a whole example — it is embedded as-is, not chunked, and no opposites are
+        generated. This is the path for real user-labelled data.
+
+        With ``include_existing=True``, the current brand's stored examples are
+        reused (embeddings and all, no re-embedding) and the new ones are appended —
+        so you can grow a bootstrap model with real feedback over time. Returns
+        training accuracy.
+        """
+        if not examples:
+            raise ValueError("examples must be a non-empty list of (text, label) pairs.")
+
+        new_on: list[str] = []
+        new_off: list[str] = []
+        for text, label in examples:
+            clean = self._validate_response(text)
+            value = int(label)
+            if value == 1:
+                new_on.append(clean)
+            elif value == 0:
+                new_off.append(clean)
+            else:
+                raise ValueError(
+                    "Each label must be 1 (on-brand / thumbs up) or 0 (off-brand / thumbs down)."
+                )
+
+        new_embeddings = self._encode(new_on + new_off)
+        on_texts, on_embeddings = new_on, new_embeddings[: len(new_on)]
+        off_texts, off_embeddings = new_off, new_embeddings[len(new_on) :]
+
+        if include_existing:
+            existing = self.store.load(self.brand_id)
+            if isinstance(existing, dict) and existing.get("on_embeddings") is not None:
+                on_texts = list(existing["on_chunks"]) + on_texts
+                off_texts = list(existing["off_chunks"]) + off_texts
+                on_embeddings = np.vstack([existing["on_embeddings"], on_embeddings])
+                off_embeddings = np.vstack([existing["off_embeddings"], off_embeddings])
+
+        if not on_texts or not off_texts:
+            raise ValueError(
+                "Training needs at least one on-brand (1) and one off-brand (0) example."
+            )
+        return self._fit_embedded(on_texts, on_embeddings, off_texts, off_embeddings)
+
     def _fit(self, on_chunks: list[str], off_chunks: list[str]) -> float:
         """Embed labelled chunks, fit the head, persist the artifact, return accuracy."""
-        text_samples = on_chunks + off_chunks
+        embeddings = self._encode(on_chunks + off_chunks)
+        split = len(on_chunks)
+        return self._fit_embedded(
+            on_chunks, embeddings[:split], off_chunks, embeddings[split:]
+        )
+
+    def _fit_embedded(
+        self,
+        on_chunks: list[str],
+        on_embeddings: np.ndarray,
+        off_chunks: list[str],
+        off_embeddings: np.ndarray,
+    ) -> float:
+        """Fit the head from pre-computed embeddings, persist, and return accuracy."""
         labels = np.concatenate(
             (np.ones(len(on_chunks), dtype=np.int64), np.zeros(len(off_chunks), dtype=np.int64))
         )
-        embeddings = self._encode(text_samples)
+        embeddings = np.vstack([on_embeddings, off_embeddings]).astype(np.float32)
 
         self.classifier = LogisticRegression(class_weight="balanced", max_iter=1000)
         self.classifier.fit(embeddings, labels)
 
-        self.on_chunks = on_chunks
-        self.off_chunks = off_chunks
-        self.on_embeddings = embeddings[: len(on_chunks)]
-        self.off_embeddings = embeddings[len(on_chunks) :]
+        self.on_chunks = list(on_chunks)
+        self.off_chunks = list(off_chunks)
+        self.on_embeddings = on_embeddings
+        self.off_embeddings = off_embeddings
 
         self.store.save(
             self.brand_id,
@@ -221,6 +342,26 @@ class SimasiaGuard:
         self._load_artifact()
         embedding = self._encode([text])
         return self._on_brand_probability(embedding)
+
+    def pick_best(self, candidates: list[str]) -> dict[str, object]:
+        """Score several candidate responses and return the most on-brand one.
+
+        Best-of-N reranking: embed all candidates in one batch, score each, and
+        return the highest. Because it only *ranks* candidates against each other,
+        it is robust to a poorly-calibrated absolute threshold — the model just has
+        to order them roughly right.
+
+        Returns ``{"text", "score", "ranked"}`` where ``ranked`` is every candidate
+        with its score, best first.
+        """
+        if not candidates:
+            raise ValueError("candidates must be a non-empty list of strings")
+        texts = [self._validate_response(candidate) for candidate in candidates]
+        self._load_artifact()
+        scores = self._on_brand_scores(self._encode(texts))
+        order = np.argsort(scores)[::-1]
+        ranked = [{"text": texts[i], "score": float(scores[i])} for i in order]
+        return {"text": ranked[0]["text"], "score": ranked[0]["score"], "ranked": ranked}
 
     def explain(self, llm_generated_text: str) -> dict[str, object]:
         """Score a response and ground the verdict in the brand's own samples.
@@ -307,12 +448,16 @@ class SimasiaGuard:
         matrix_norm = matrix / (np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-12)
         return matrix_norm @ query_norm
 
-    def _on_brand_probability(self, embedding: np.ndarray) -> float:
-        """Probability of the on-brand class for an already-encoded sample."""
+    def _on_brand_scores(self, embeddings: np.ndarray) -> np.ndarray:
+        """On-brand probability for each row of an encoded batch."""
         assert self.classifier is not None  # set by _load_artifact
-        probabilities = self.classifier.predict_proba(embedding)
+        probabilities = self.classifier.predict_proba(embeddings)
         on_brand_index = int(np.where(self.classifier.classes_ == 1)[0][0])
-        return float(probabilities[0, on_brand_index])
+        return probabilities[:, on_brand_index]
+
+    def _on_brand_probability(self, embedding: np.ndarray) -> float:
+        """Probability of the on-brand class for a single encoded sample."""
+        return float(self._on_brand_scores(embedding)[0])
 
     @staticmethod
     def _validate_response(llm_generated_text: str) -> str:

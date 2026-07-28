@@ -97,8 +97,11 @@ def resolve_side(training: dict, side: str) -> str | list[str] | None:
     return None
 
 
-def run_training(config: dict) -> float:
-    """Build a guard from config and train it. Returns training accuracy."""
+def run_training(config: dict, progress=None) -> float:
+    """Build a guard from config and train it. Returns training accuracy.
+
+    ``progress(done, total)`` is forwarded to :meth:`SimasiaGuard.train`.
+    """
     guard = build_guard(config)
     training = config["training"]
 
@@ -108,4 +111,10 @@ def run_training(config: dict) -> float:
             "config [training] needs on_brand_text, on_brand_file, or on_brand_urls."
         )
     off_brand = resolve_side(training, "off_brand")
-    return guard.train(on_brand, off_brand)
+    return guard.train(
+        on_brand,
+        off_brand,
+        progress=progress,
+        max_chunks=training.get("max_chunks"),
+        dimensions=training.get("dimensions"),
+    )
